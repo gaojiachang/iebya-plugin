@@ -1,0 +1,27 @@
+<idea-plugin>
+    <id>org.iebya.plugin</id>
+    <name>iebya</name>
+    <vendor email="iebya@bupt.edu.cn">iebya from bupt</vendor>
+    <description>这是iebya创建的插件，包含一些有趣的小功能；这是iebya创建的插件，包含一些有趣的小功能</description>
+
+    <!-- 依赖模块 -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 这里可以添加扩展点 -->
+    </extensions>
+
+    <actions>
+        <!-- 创建一个分组菜单 -->
+        <group id="org.jcgao.iebyaplugin.IebyaMenuGroup" text="Iebya" description="Iebya Plugin Actions" popup="true">
+            <!-- 将分组菜单添加到右键菜单 -->
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <!-- 添加子菜单项 -->
+            <action id="org.jcgao.iebyaplugin.GenerateEmptyCheckAction" class="org.jcgao.iebyaplugin.GenerateEmptyCheckAction" text="Empty Check"
+                    description="Generate code to check if a List is empty">
+            <keyboard-shortcut keymap="$default" first-keystroke="alt ctrl H"/>
+            </action>
+        </group>
+    </actions>
+</idea-plugin>

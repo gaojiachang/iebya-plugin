@@ -1,0 +1,19 @@
+# 忽略 Gradle 相关文件
+.gradle
+.idea
+.build
+.run
+*.iml
+
+# 忽略构建输出目录
+build/
+
+# 忽略 Gradle 包装器脚本
+gradlew
+gradlew.bat
+
+# 忽略本地配置文件
+gradle.properties
+
+# 忽略临时文件和控制台输出
+临时文件和控制台/
