@@ -11,19 +11,25 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiBlockStatement;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementFactory;
+import com.intellij.psi.PsiExpression;
+import com.intellij.psi.PsiExpressionList;
+import com.intellij.psi.PsiExpressionStatement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiIdentifier;
+import com.intellij.psi.PsiIfStatement;
 import com.intellij.psi.PsiImportList;
 import com.intellij.psi.PsiImportStatement;
 import com.intellij.psi.PsiImportStatementBase;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
-import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiPrimitiveType;
 import com.intellij.psi.PsiReference;
 import com.intellij.psi.PsiReferenceExpression;
@@ -87,18 +93,24 @@ public class GenerateEmptyCheckAction extends AnAction {
             return;
         }
         String methodName = containingMethod.getName();
-        PsiParameter[] parameters = containingMethod.getParameterList().getParameters();
+
+        // 新增：检查是否已存在相同的空值判断
+        PsiStatement statement = getNextStatement(containingMethod, variable);
+        if (isEmptyCheckStatement(statement)) {
+            modifyExistingLog((PsiIfStatement) statement, variableName);
+            return;
+        }
 
         // 4. 确定返回语句
         String returnStatement = getReturnStatement(containingMethod);
 
         // 5. 生成代码
-        String code = geneCode(variableName, className, methodName, parameters, returnStatement);
+        String code = geneCode(variableName, className, methodName, returnStatement);
 
         // 6. 插入代码
         insert(code);
 
-        // 7. 检查并导入 CollectionUtils
+        // 7. 检查并导入 ObjectUtils
         if (!isImported(OBJECT_UTILS_CLASS)) {
             addImport(OBJECT_UTILS_CLASS);
         }
@@ -108,7 +120,94 @@ public class GenerateEmptyCheckAction extends AnAction {
             addImport(SLF4J_CLASS);
             addAnnotation(containingClass, SLF4J_ANNOTATION);
         }
+    }
 
+
+    /**
+     * 检查是否是 ObjectUtils.isEmpty 判断语句
+     */
+    private boolean isEmptyCheckStatement(PsiStatement statement) {
+        if (!(statement instanceof PsiIfStatement)) {
+            return false;
+        }
+
+        PsiIfStatement ifStatement = (PsiIfStatement) statement;
+        PsiExpression condition = ifStatement.getCondition();
+
+        if (condition instanceof PsiMethodCallExpression) {
+            PsiMethodCallExpression methodCall = (PsiMethodCallExpression) condition;
+            PsiReferenceExpression methodExpression = methodCall.getMethodExpression();
+
+            if ("isEmpty".equals(methodExpression.getReferenceName())) {
+                PsiExpression qualifier = methodExpression.getQualifierExpression();
+                if (qualifier != null && qualifier.getText().contains("ObjectUtils")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 获取变量后的下一条语句
+     */
+    private PsiStatement getNextStatement(PsiMethod method, PsiElement element) {
+        PsiStatement[] statements = PsiTreeUtil.getChildrenOfType(method.getBody(), PsiStatement.class);
+        if (statements == null) {
+            return null;
+        }
+
+        PsiStatement currentStatement = PsiTreeUtil.getParentOfType(element, PsiStatement.class);
+        if (currentStatement == null) {
+            return null;
+        }
+
+        for (int i = 0; i < statements.length - 1; i++) {
+            if (statements[i].equals(currentStatement)) {
+                return statements[i + 1];
+            }
+        }
+        return null;
+    }
+
+    private void modifyExistingLog(PsiIfStatement ifStatement, String variableName) {
+        PsiStatement thenBranch = ifStatement.getThenBranch();
+        if (thenBranch instanceof PsiBlockStatement) {
+            PsiCodeBlock codeBlock = ((PsiBlockStatement) thenBranch).getCodeBlock();
+            PsiStatement[] blockStatements = codeBlock.getStatements();
+
+            for (PsiStatement stmt : blockStatements) {
+                if (stmt instanceof PsiExpressionStatement) {
+                    PsiExpression expr = ((PsiExpressionStatement) stmt).getExpression();
+                    if (expr instanceof PsiMethodCallExpression) {
+                        PsiMethodCallExpression methodCall = (PsiMethodCallExpression) expr;
+                        if (methodCall.getMethodExpression().getText().equals("log.error")) {
+                            // 修改 log 语句
+                            PsiExpressionList args = methodCall.getArgumentList();
+                            PsiExpression[] expressions = args.getExpressions();
+
+                            if (expressions.length > 0) {
+                                String originalLogMessage = expressions[0].getText();
+                                String newLogMessage = originalLogMessage.substring(0, originalLogMessage.length() - 1)
+                                        + ", " + variableName + ": {}\"";
+
+                                WriteCommandAction.runWriteCommandAction(project, () -> {
+                                    // 替换日志消息
+                                    PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+                                    PsiExpression newMessage = factory.createExpressionFromText(newLogMessage, methodCall);
+                                    expressions[0].replace(newMessage);
+
+                                    // 添加新的参数
+                                    PsiExpression newParam = factory.createExpressionFromText(variableName, methodCall);
+                                    args.add(newParam);
+                                });
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private boolean hasAnnotation(PsiClass psiClass, String annotationName) {
@@ -184,7 +283,7 @@ public class GenerateEmptyCheckAction extends AnAction {
         });
     }
 
-    private String geneCode(String variableName, String className, String methodName, PsiParameter[] parameters, String returnStatement) {
+    private String geneCode(String variableName, String className, String methodName, String returnStatement) {
         int caretOffset = editor.getCaretModel().getOffset();
         PsiElement element = psiFile.findElementAt(caretOffset);
         if (element == null) {
@@ -200,8 +299,7 @@ public class GenerateEmptyCheckAction extends AnAction {
         // 获取语句的起始位置和缩进
         int statementStartOffset = statement.getTextRange().getStartOffset();
         Document document = editor.getDocument();
-        int statementStartLine = document.getLineNumber(statementStartOffset);
-        int statementStartColumn = statementStartOffset - document.getLineStartOffset(statementStartLine);
+        int statementStartColumn = statementStartOffset - document.getLineStartOffset(document.getLineNumber(statementStartOffset));
 
         String indent = "    "; // 单级缩进（4 个空格）
         String left = " ".repeat(statementStartColumn); // 基础缩进，与光标位置对齐
@@ -212,26 +310,7 @@ public class GenerateEmptyCheckAction extends AnAction {
 
         // 构建 log.error 语句（第二级缩进）
         codeBuilder.append(left).append(indent).append("log.error(\"### ").append(className).append(".").append(methodName)
-                .append("：").append(variableName).append(" is empty");
-
-        // 如果有参数时：根据 parameters.length 动态设计
-        if (parameters.length > 0) {
-            codeBuilder.append(", 方法入参: ");
-            // 动态生成带参数名的占位符
-            for (int i = 0; i < parameters.length; i++) {
-                PsiParameter param = parameters[i];
-                if (i > 0) {
-                    codeBuilder.append(", "); // 参数之间用逗号分隔
-                }
-                codeBuilder.append(param.getName()).append(": {}"); // 参数名: {}
-            }
-            codeBuilder.append("\"");
-            // 添加参数值
-            for (PsiParameter param : parameters) {
-                codeBuilder.append(", ").append(param.getName());
-            }
-        }
-        codeBuilder.append(");\n");
+                .append("：").append(variableName).append(" is empty\");\n");
 
         // 添加 return 语句（第二级缩进）
         codeBuilder.append(left).append(indent).append(returnStatement).append("\n");
