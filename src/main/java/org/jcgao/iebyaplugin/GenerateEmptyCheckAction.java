@@ -22,7 +22,6 @@ import com.intellij.psi.PsiExpressionList;
 import com.intellij.psi.PsiExpressionStatement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
-import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiIfStatement;
 import com.intellij.psi.PsiImportList;
 import com.intellij.psi.PsiImportStatement;
@@ -31,7 +30,6 @@ import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiPrimitiveType;
-import com.intellij.psi.PsiReference;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiStatement;
 import com.intellij.psi.PsiType;
@@ -40,6 +38,7 @@ import com.intellij.psi.PsiVariable;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.util.PsiTreeUtil;
 
+@SuppressWarnings("checkstyle:NeedBraces")
 public class GenerateEmptyCheckAction extends AnAction {
     private static final String OBJECT_UTILS_CLASS = "org.apache.commons.lang3.ObjectUtils";
     private static final String SLF4J_CLASS = "lombok.extern.slf4j.Slf4j";
@@ -62,24 +61,20 @@ public class GenerateEmptyCheckAction extends AnAction {
         }
 
         // 1. 获取光标位置的变量
-        PsiElement targetElement = findVariableAtCursor();
-        if (targetElement == null) {
+        PsiElement cursorElement = psiFile.findElementAt(editor.getCaretModel().getOffset());
+        if (cursorElement == null) {
             Messages.showErrorDialog(project, "No variable found at cursor position.", "Error");
             return;
         }
-        String variableName = targetElement.getText();
-        if (variableName == null || variableName.trim().isEmpty()) {
-            Messages.showErrorDialog(project, "Variable name is empty.", "Error");
-            return;
-        }
-        PsiVariable variable = PsiTreeUtil.getParentOfType(targetElement, PsiVariable.class);
-        if (variable == null) {
+        String variableName = cursorElement.getText();
+        PsiVariable cursorVar = PsiTreeUtil.getParentOfType(cursorElement, PsiVariable.class);
+        if (cursorVar == null) {
             Messages.showErrorDialog(project, "No variable found at cursor position.", "Error");
             return;
         }
 
         // 2. 获取所在的类
-        PsiClass containingClass = PsiTreeUtil.getParentOfType(variable, PsiClass.class);
+        PsiClass containingClass = PsiTreeUtil.getParentOfType(cursorVar, PsiClass.class);
         if (containingClass == null) {
             Messages.showErrorDialog(project, "No containing class found.", "Error");
             return;
@@ -87,7 +82,7 @@ public class GenerateEmptyCheckAction extends AnAction {
         String className = containingClass.getName();
 
         // 3. 获取所在的方法
-        PsiMethod containingMethod = PsiTreeUtil.getParentOfType(variable, PsiMethod.class);
+        PsiMethod containingMethod = PsiTreeUtil.getParentOfType(cursorVar, PsiMethod.class);
         if (containingMethod == null) {
             Messages.showErrorDialog(project, "No containing method found.", "Error");
             return;
@@ -95,9 +90,9 @@ public class GenerateEmptyCheckAction extends AnAction {
         String methodName = containingMethod.getName();
 
         // 新增：检查是否已存在相同的空值判断
-        PsiStatement statement = getNextStatement(containingMethod, variable);
+        PsiStatement statement = getNextStatement(cursorVar);
         if (isEmptyCheckStatement(statement)) {
-            modifyExistingLog((PsiIfStatement) statement, variableName);
+            modifyExistingLog((PsiIfStatement) statement, cursorElement);
             return;
         }
 
@@ -127,10 +122,10 @@ public class GenerateEmptyCheckAction extends AnAction {
      * 检查是否是 ObjectUtils.isEmpty 判断语句
      */
     private boolean isEmptyCheckStatement(PsiStatement statement) {
+
         if (!(statement instanceof PsiIfStatement)) {
             return false;
         }
-
         PsiIfStatement ifStatement = (PsiIfStatement) statement;
         PsiExpression condition = ifStatement.getCondition();
 
@@ -151,63 +146,79 @@ public class GenerateEmptyCheckAction extends AnAction {
     /**
      * 获取变量后的下一条语句
      */
-    private PsiStatement getNextStatement(PsiMethod method, PsiElement element) {
-        PsiStatement[] statements = PsiTreeUtil.getChildrenOfType(method.getBody(), PsiStatement.class);
-        if (statements == null) {
-            return null;
-        }
-
-        PsiStatement currentStatement = PsiTreeUtil.getParentOfType(element, PsiStatement.class);
-        if (currentStatement == null) {
-            return null;
-        }
-
-        for (int i = 0; i < statements.length - 1; i++) {
-            if (statements[i].equals(currentStatement)) {
-                return statements[i + 1];
-            }
-        }
-        return null;
+    private PsiStatement getNextStatement(PsiElement element) {
+        PsiStatement currentElement = PsiTreeUtil.getParentOfType(element, PsiStatement.class);
+        return PsiTreeUtil.getNextSiblingOfType(currentElement, PsiStatement.class);
     }
 
-    private void modifyExistingLog(PsiIfStatement ifStatement, String variableName) {
+    private void modifyExistingLog(PsiIfStatement ifStatement, PsiElement cursorElement) {
+        PsiElement resolvedElement = ((PsiReferenceExpression) cursorElement.getParent()).resolve();
         PsiStatement thenBranch = ifStatement.getThenBranch();
-        if (thenBranch instanceof PsiBlockStatement) {
-            PsiCodeBlock codeBlock = ((PsiBlockStatement) thenBranch).getCodeBlock();
-            PsiStatement[] blockStatements = codeBlock.getStatements();
 
-            for (PsiStatement stmt : blockStatements) {
-                if (stmt instanceof PsiExpressionStatement) {
-                    PsiExpression expr = ((PsiExpressionStatement) stmt).getExpression();
-                    if (expr instanceof PsiMethodCallExpression) {
-                        PsiMethodCallExpression methodCall = (PsiMethodCallExpression) expr;
-                        if (methodCall.getMethodExpression().getText().equals("log.error")) {
-                            // 修改 log 语句
-                            PsiExpressionList args = methodCall.getArgumentList();
-                            PsiExpression[] expressions = args.getExpressions();
-
-                            if (expressions.length > 0) {
-                                String originalLogMessage = expressions[0].getText();
-                                String newLogMessage = originalLogMessage.substring(0, originalLogMessage.length() - 1)
-                                        + ", " + variableName + ": {}\"";
-
-                                WriteCommandAction.runWriteCommandAction(project, () -> {
-                                    // 替换日志消息
-                                    PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
-                                    PsiExpression newMessage = factory.createExpressionFromText(newLogMessage, methodCall);
-                                    expressions[0].replace(newMessage);
-
-                                    // 添加新的参数
-                                    PsiExpression newParam = factory.createExpressionFromText(variableName, methodCall);
-                                    args.add(newParam);
-                                });
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
+        if (resolvedElement instanceof PsiVariable) {
+            String variableName = cursorElement.getText();
+            handleLogModification(thenBranch, variableName, variableName);
+        } else if (resolvedElement instanceof PsiMethod) {
+            PsiMethodCallExpression methodCall = findContainingMethodCallExpression(cursorElement);
+            String methodName = methodCall.getMethodExpression().getReferenceName();
+            String methodCallText = methodCall.getText();
+            handleLogModification(thenBranch, methodName, methodCallText);
         }
+    }
+
+    /**
+     * 查找包含指定元素的完整方法调用表达式。
+     */
+    private PsiMethodCallExpression findContainingMethodCallExpression(PsiElement element) {
+        PsiElement parent = element.getParent();
+        while (parent != null) {
+            if (parent instanceof PsiMethodCallExpression) {
+                return (PsiMethodCallExpression) parent;
+            }
+            parent = parent.getParent();
+        }
+        return null; // 如果没有找到方法调用表达式，返回 null
+    }
+
+
+    private void handleLogModification(PsiStatement thenBranch, String key, String paramValue) {
+        if (!(thenBranch instanceof PsiBlockStatement)) return;
+
+        PsiCodeBlock codeBlock = ((PsiBlockStatement) thenBranch).getCodeBlock();
+        for (PsiStatement stmt : codeBlock.getStatements()) {
+            if (!(stmt instanceof PsiExpressionStatement)) continue;
+
+            PsiExpression expr = ((PsiExpressionStatement) stmt).getExpression();
+            if (!(expr instanceof PsiMethodCallExpression)) continue;
+
+            PsiMethodCallExpression logCall = (PsiMethodCallExpression) expr;
+            if (!"log.error".equals(logCall.getMethodExpression().getText())) continue;
+
+            modifyLogStatement(logCall, key, paramValue);
+            return; // 仅处理第一个log.error
+        }
+    }
+
+    private void modifyLogStatement(PsiMethodCallExpression logCall, String key, String paramValue) {
+        PsiExpressionList args = logCall.getArgumentList();
+        PsiExpression[] expressions = args.getExpressions();
+        if (expressions.length == 0) return;
+
+        String originalMsg = expressions[0].getText();
+        String newMsg = String.format("%s, %s: {}\"",
+                originalMsg.substring(0, originalMsg.length() - 1), key);
+
+        WriteCommandAction.runWriteCommandAction(project, () -> {
+            PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+
+            // 更新日志消息
+            PsiExpression newMsgExpr = factory.createExpressionFromText(newMsg, logCall);
+            expressions[0].replace(newMsgExpr);
+
+            // 添加新参数
+            PsiExpression paramExpr = factory.createExpressionFromText(paramValue, logCall);
+            args.add(paramExpr);
+        });
     }
 
     private boolean hasAnnotation(PsiClass psiClass, String annotationName) {
@@ -371,39 +382,6 @@ public class GenerateEmptyCheckAction extends AnAction {
 
         // 对于引用类型（对象类型），返回 "return null;"
         return "return null;";
-    }
-
-    // 辅助方法：判断光标是否在变量名范围内
-    private PsiElement findVariableAtCursor() {
-        // 获取光标位置
-        int offset = editor.getCaretModel().getOffset();
-        PsiElement element = psiFile.findElementAt(offset);
-        if (element == null) {
-            return null;
-        }
-
-        // 如果光标直接在一个标识符上
-        if (element instanceof PsiIdentifier) {
-            return element;
-        }
-
-        // 如果光标不在标识符上，尝试查找附近的变量引用或定义
-        PsiElement parent = element.getParent();
-        while (parent != null) {
-            if (parent instanceof PsiReferenceExpression) {
-                PsiReference reference = parent.getReference();
-                if (reference != null) {
-                    PsiElement resolved = reference.resolve();
-                    if (resolved instanceof PsiVariable) {
-                        return parent; // 返回引用表达式
-                    }
-                }
-            } else if (parent instanceof PsiVariable) {
-                return ((PsiVariable) parent).getNameIdentifier(); // 返回变量名标识符
-            }
-            parent = parent.getParent();
-        }
-        return null;
     }
 
     // 仅在编辑器中显示此操作

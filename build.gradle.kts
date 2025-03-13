@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "org.jcgao"
-version = "1.5"
+version = "2.0"
 
 repositories {
     mavenCentral()
